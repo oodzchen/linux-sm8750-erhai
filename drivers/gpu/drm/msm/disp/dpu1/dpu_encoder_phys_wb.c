@@ -549,9 +549,11 @@ static void dpu_encoder_phys_wb_disable(struct dpu_encoder_phys *phys_enc)
 	 * Any target earlier than SM8150 will need it and when
 	 * WB support is added to those targets will need to add
 	 * the legacy teardown sequence as well.
+	 *
+	 * On core_major_ver >= 5, dpu_encoder_virt_atomic_disable() calls
+	 * dpu_encoder_helper_phys_cleanup() once per distinct hw_ctl after all
+	 * physical encoders have stopped.
 	 */
-	if (phys_enc->dpu_kms->catalog->mdss_ver->core_major_ver >= 5)
-		dpu_encoder_helper_phys_cleanup(phys_enc);
 
 	phys_enc->enable_state = DPU_ENC_DISABLED;
 }

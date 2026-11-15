@@ -653,9 +653,28 @@ static void dpu_encoder_phys_vid_disable(struct dpu_encoder_phys *phys_enc)
 				  DRMID(phys_enc->parent),
 				  phys_enc->hw_intf->idx - INTF_0, ret);
 		}
+	} else if (intf_status.is_en &&
+		   !dpu_encoder_phys_vid_is_master(phys_enc) &&
+		   phys_enc->hw_intf && phys_enc->hw_intf->ops.get_status) {
+		/*
+		 * Bonded slave INTF has no vsync IRQ registered, yet CTL cleanup
+		 * runs once after all phys encoders stop; poll until the slave
+		 * timing engine actually finishes the current frame so CTL_SW_RESET
+		 * does not race with active INTF/SSPP fetch.
+		 */
+		ktime_t deadline = ktime_add_ms(ktime_get(), 100);
+
+		while (intf_status.is_en && ktime_before(ktime_get(), deadline)) {
+			usleep_range(500, 1000);
+			phys_enc->hw_intf->ops.get_status(phys_enc->hw_intf,
+							  &intf_status);
+		}
+		if (intf_status.is_en)
+			DRM_ERROR("wait slave disable failed: id:%u intf:%d\n",
+				  DRMID(phys_enc->parent),
+				  phys_enc->hw_intf->idx - INTF_0);
 	}
 
-	dpu_encoder_helper_phys_cleanup(phys_enc);
 	phys_enc->enable_state = DPU_ENC_DISABLED;
 }
 

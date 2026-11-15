@@ -1420,6 +1420,29 @@ static void dpu_encoder_virt_atomic_disable(struct drm_encoder *drm_enc,
 			phys->ops.disable(phys);
 	}
 
+	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
+		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
+		int j;
+
+		if (!phys || !phys->hw_ctl)
+			continue;
+
+		if (phys->hw_wb) {
+			if (phys->dpu_kms->catalog->mdss_ver->core_major_ver < 5)
+				continue;
+		} else if (phys->intf_mode != INTF_MODE_VIDEO) {
+			continue;
+		}
+
+		for (j = 0; j < i; j++) {
+			if (dpu_enc->phys_encs[j] &&
+			    dpu_enc->phys_encs[j]->hw_ctl == phys->hw_ctl)
+				break;
+		}
+		if (j == i)
+			dpu_encoder_helper_phys_cleanup(phys);
+	}
+
 
 	/* after phys waits for frame-done, should be no more frames pending */
 	if (atomic_xchg(&dpu_enc->frame_done_timeout_ms, 0)) {
@@ -2324,7 +2347,12 @@ void dpu_encoder_helper_phys_cleanup(struct dpu_encoder_phys *phys_enc)
 
 	ctl->ops.reset(ctl);
 
-	dpu_encoder_helper_reset_mixers(phys_enc);
+	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
+		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
+
+		if (phys && phys->hw_ctl == ctl)
+			dpu_encoder_helper_reset_mixers(phys);
+	}
 
 	/*
 	 * TODO: move the once-only operation like CTL flush/trigger
@@ -2341,15 +2369,20 @@ void dpu_encoder_helper_phys_cleanup(struct dpu_encoder_phys *phys_enc)
 			ctl->ops.update_pending_flush_wb(ctl, phys_enc->hw_wb->idx);
 	} else {
 		for (i = 0; i < dpu_enc->num_phys_encs; i++) {
-			if (dpu_enc->phys_encs[i] && phys_enc->hw_intf->ops.bind_pingpong_blk)
-				phys_enc->hw_intf->ops.bind_pingpong_blk(
-						dpu_enc->phys_encs[i]->hw_intf,
+			struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
+
+			if (!phys || phys->hw_ctl != ctl || !phys->hw_intf)
+				continue;
+
+			if (phys->hw_intf->ops.bind_pingpong_blk)
+				phys->hw_intf->ops.bind_pingpong_blk(
+						phys->hw_intf,
 						PINGPONG_NONE);
 
 			/* mark INTF flush as pending */
 			if (ctl->ops.update_pending_flush_intf)
 				ctl->ops.update_pending_flush_intf(ctl,
-						dpu_enc->phys_encs[i]->hw_intf->idx);
+						phys->hw_intf->idx);
 		}
 	}
 
@@ -2382,21 +2415,28 @@ void dpu_encoder_helper_phys_cleanup(struct dpu_encoder_phys *phys_enc)
 		dpu_enc->dsc = NULL;
 	}
 
-	intf_cfg.stream_sel = 0; /* Don't care value for video mode */
-	intf_cfg.mode_3d = dpu_encoder_helper_get_3d_blend_mode(phys_enc);
-	intf_cfg.dsc = dpu_encoder_helper_get_dsc(phys_enc);
-	intf_cfg.cwb = dpu_enc->cwb_mask;
+	if (ctl->ops.reset_intf_cfg) {
+		for (i = 0; i < dpu_enc->num_phys_encs; i++) {
+			struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
 
-	if (phys_enc->hw_intf)
-		intf_cfg.intf = phys_enc->hw_intf->idx;
-	if (phys_enc->hw_wb)
-		intf_cfg.wb = phys_enc->hw_wb->idx;
+			if (!phys || phys->hw_ctl != ctl)
+				continue;
 
-	if (phys_enc->hw_pp && phys_enc->hw_pp->merge_3d)
-		intf_cfg.merge_3d = phys_enc->hw_pp->merge_3d->idx;
+			memset(&intf_cfg, 0, sizeof(intf_cfg));
+			intf_cfg.stream_sel = 0; /* Don't care value for video mode */
+			intf_cfg.mode_3d = dpu_encoder_helper_get_3d_blend_mode(phys);
+			intf_cfg.dsc = dpu_encoder_helper_get_dsc(phys);
+			intf_cfg.cwb = dpu_enc->cwb_mask;
+			if (phys->hw_intf)
+				intf_cfg.intf = phys->hw_intf->idx;
+			if (phys->hw_wb)
+				intf_cfg.wb = phys->hw_wb->idx;
+			if (phys->hw_pp && phys->hw_pp->merge_3d)
+				intf_cfg.merge_3d = phys->hw_pp->merge_3d->idx;
 
-	if (ctl->ops.reset_intf_cfg)
-		ctl->ops.reset_intf_cfg(ctl, &intf_cfg);
+			ctl->ops.reset_intf_cfg(ctl, &intf_cfg);
+		}
+	}
 
 	ctl->ops.trigger_flush(ctl);
 	ctl->ops.trigger_start(ctl);
