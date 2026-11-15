@@ -1423,8 +1423,22 @@ static struct msm_display_topology dpu_crtc_get_topology(
 	else
 		topology.num_lm = 1;
 
-	if (crtc_state->ctm || crtc_state->gamma_lut)
+	/*
+	 * Reserve DSPP blocks upfront for non-WB display outputs when the catalog
+	 * provides them so toggling CTM (e.g. Night Light) avoids a modeset
+	 * and keeps hw_dspp assigned when clearing PCC.
+	 */
+	if (crtc_state->ctm || crtc_state->gamma_lut) {
 		topology.num_dspp = topology.num_lm;
+	} else if (dpu_kms->catalog->dspp_count) {
+		drm_for_each_encoder_mask(drm_enc, crtc->dev,
+					  crtc_state->encoder_mask) {
+			if (drm_enc->encoder_type != DRM_MODE_ENCODER_VIRTUAL) {
+				topology.num_dspp = topology.num_lm;
+				break;
+			}
+		}
+	}
 
 	return topology;
 }
@@ -1514,6 +1528,11 @@ int dpu_crtc_check_mode_changed(struct drm_crtc_state *old_crtc_state,
 
 	if ((clone_mode_requested && !clone_mode_enabled) ||
 	    (!clone_mode_requested && clone_mode_enabled))
+		new_crtc_state->mode_changed = true;
+
+	if ((new_crtc_state->ctm || new_crtc_state->gamma_lut) &&
+	    (!to_dpu_crtc_state(old_crtc_state)->num_mixers ||
+	     !to_dpu_crtc_state(old_crtc_state)->mixers[0].hw_dspp))
 		new_crtc_state->mode_changed = true;
 
 	return 0;
